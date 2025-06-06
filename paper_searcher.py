@@ -940,7 +940,7 @@ class EnhancedMultiSourcePaperSearcher:
         
         similarity_threshold = 75  # 默认阈值
         if fuzzy_matching:
-            threshold_input = 75#input("模糊匹配相似度阈值 (50-100, 默认75): ").strip()
+            threshold_input = input("模糊匹配相似度阈值 (50-100, 默认75): ").strip()
             if threshold_input.isdigit():
                 threshold = int(threshold_input)
                 if 50 <= threshold <= 100:
