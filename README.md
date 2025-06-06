@@ -29,6 +29,7 @@
 * 现有DeepResearch系统很少直接阅读大量文献的全文内容
 * 缺乏智能的研究充分性评估和迭代优化机制
 * 论文获取成功率不高，容错能力有限
+* **贵**（相比200美刀一个月的GPT等，本项目采用DeepSeek R1-0528时运行一次只要0.2RMB左右!!!!!!!!）
 
 ### 🌟 核心特性
 
@@ -336,6 +337,7 @@ Current DeepResearch AI research assistants have the following limitations:
 * Existing DeepResearch systems rarely read the full text of a large volume of literature directly
 * Lack of intelligent research sufficiency evaluation and iterative optimization mechanisms
 * Low success rate in paper acquisition and limited fault tolerance
+* **expensive**(Compared to GPT and others that cost around $200 per month, this project only costs about 0.2 RMB(about $0.0278) per run when using DeepSeek R1-0528!!!!!!!!)
 
 ### 🌟 Core Features
 
