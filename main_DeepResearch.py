@@ -42,7 +42,7 @@ def print_banner():
     """打印程序横幅"""
     banner = """
 ╔══════════════════════════════════════════════════════════════╗
-║                 深研星图-学术深度研究系统                         ║
+║                 深研星图-学术深度研究系统                      ║
 ║           Enhanced Academic Deep Research System             ║
 ║    Google Scholar + arXiv + Conference + Citation Filter     ║
 ║              + Adequacy Evaluation + Smart Stop              ║
