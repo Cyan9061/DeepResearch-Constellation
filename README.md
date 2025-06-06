@@ -258,11 +258,11 @@ CONCURRENT_BATCH_SIZE = 4
 # 快速演示
 python demo_research.py
 
-# 完整研究流程
+# 完整研究流程,建议初次使用不筛选会议
 python main_DeepResearch.py
 ```
 
-### 🎮 运行示例
+### 🎮 未来改进方向
 
 #### 1. **📥 增强论文下载系统**
 
@@ -876,11 +876,11 @@ CONCURRENT_BATCH_SIZE = 4
 # Quick demonstration
 python demo_research.py
 
-# Full research pipeline
+# Full research pipeline,recommend turning off conference filter when first running
 python main_DeepResearch.py
 ```
 
-### 🎮 Usage Examples
+### 🎮 Future improvement directions
 
 #### 1. **📥 Enhanced Paper Download System**
 
