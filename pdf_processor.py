@@ -1,7 +1,7 @@
 import requests
 import fitz  # PyMuPDF
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Set
 import time
 import re
 from urllib.parse import urljoin, urlparse
@@ -53,10 +53,15 @@ class EnhancedPDFProcessor:
             'nature.com': self._handle_nature_pdf,
         }
         
+        # 🆕 添加下载状态跟踪，防止无限循环
+        self._attempted_urls: Set[str] = set()
+        self._max_recursion_depth = 3
+        
         print(f"🔧 Enhanced PDF Processor 初始化完成")
         print(f"   - 支持 {len(self.pdf_handlers)} 种专门的PDF处理器")
         print(f"   - 增强的浏览器模拟")
         print(f"   - 多重备用下载机制")
+        print(f"   - 🆕 添加循环保护和链接验证")
     
     def process_paper(self, paper: Dict, download_dir: str) -> Optional[Dict]:
         """
@@ -64,6 +69,9 @@ class EnhancedPDFProcessor:
         """
         title = paper.get('title', 'Unknown')
         print(f"🔍 正在处理论文: {title}")
+        
+        # 🆕 重置下载状态跟踪（每篇论文重新开始）
+        self._attempted_urls.clear()
         
         # 🎯 多重PDF获取策略
         pdf_path = self._get_pdf_with_enhanced_strategies(paper, download_dir)
@@ -99,6 +107,55 @@ class EnhancedPDFProcessor:
         
         return None
     
+    def _is_valid_url(self, url: str) -> bool:
+        """🆕 验证URL是否有效且可用于下载"""
+        if not url or not isinstance(url, str):
+            return False
+        
+        url = url.strip()
+        
+        # 过滤明显无效的链接
+        invalid_patterns = [
+            'javascript:',
+            'mailto:',
+            '#',
+            'tel:',
+            'void(0)',
+            'return false',
+            'onclick',
+        ]
+        
+        url_lower = url.lower()
+        for pattern in invalid_patterns:
+            if pattern in url_lower:
+                return False
+        
+        # 检查是否是相对URL（相对URL需要base_url才能工作）
+        if url.startswith('//'):
+            return True
+        elif url.startswith('/'):
+            return True  # 相对路径，需要base_url
+        elif url.startswith(('http://', 'https://')):
+            return True
+        elif url.startswith('ftp://'):
+            return True
+        else:
+            return False  # 其他情况认为无效
+    
+    def _normalize_url(self, url: str) -> str:
+        """🆕 标准化URL用于去重"""
+        # 移除fragment
+        if '#' in url:
+            url = url.split('#')[0]
+        
+        # 移除多余的参数（保留重要参数）
+        try:
+            parsed = urlparse(url)
+            # 这里可以根据需要过滤query参数
+            return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        except:
+            return url
+    
     def _get_pdf_with_enhanced_strategies(self, paper: Dict, download_dir: str) -> Optional[Path]:
         """增强的PDF获取策略"""
         title = paper.get('title', 'Unknown')
@@ -119,6 +176,17 @@ class EnhancedPDFProcessor:
         for i, link in enumerate(prioritized_links):
             print(f"    尝试链接 {i+1}/{len(prioritized_links)}: {self._truncate_url_for_display(link)}")
             
+            # 🆕 检查链接有效性
+            if not self._is_valid_url(link):
+                print(f"      ❌ 无效链接，跳过")
+                continue
+            
+            # 🆕 检查是否已尝试过此链接
+            normalized_link = self._normalize_url(link)
+            if normalized_link in self._attempted_urls:
+                print(f"      ⚠️ 已尝试过此链接，跳过")
+                continue
+            
             # 根据域名选择专门的处理器
             domain = self._extract_domain(link)
             if domain in self.pdf_handlers:
@@ -126,7 +194,7 @@ class EnhancedPDFProcessor:
                 pdf_path = self.pdf_handlers[domain](link, safe_title, download_dir)
             else:
                 print(f"      使用通用处理器")
-                pdf_path = self._download_from_url_enhanced(link, safe_title, download_dir)
+                pdf_path = self._download_from_url_enhanced(link, safe_title, download_dir, recursion_depth=0)
             
             if pdf_path:
                 print(f"    ✅ 成功下载: {domain}")
@@ -155,6 +223,10 @@ class EnhancedPDFProcessor:
         """按成功率对PDF链接排序"""
         def link_priority(link):
             link_lower = link.lower()
+            
+            # 🆕 首先过滤无效链接
+            if not self._is_valid_url(link):
+                return 999  # 最低优先级
             
             # arXiv - 最高优先级
             if 'arxiv.org' in link_lower:
@@ -186,7 +258,9 @@ class EnhancedPDFProcessor:
             
             return 8
         
-        return sorted(set(links), key=link_priority)  # 去重并排序
+        # 🆕 先过滤有效链接，再排序去重
+        valid_links = [link for link in links if self._is_valid_url(link)]
+        return sorted(set(valid_links), key=link_priority)
     
     def _extract_domain(self, url: str) -> str:
         """提取URL的域名"""
@@ -234,7 +308,7 @@ class EnhancedPDFProcessor:
             else:
                 pdf_url = url
             
-            return self._download_from_url_enhanced(pdf_url, filename, download_dir)
+            return self._download_from_url_enhanced(pdf_url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ arXiv处理失败: {e}")
@@ -244,7 +318,7 @@ class EnhancedPDFProcessor:
         """ResearchGate PDF处理器"""
         try:
             # ResearchGate通常需要特殊处理，先尝试直接下载
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ ResearchGate处理失败: {e}")
@@ -253,7 +327,7 @@ class EnhancedPDFProcessor:
     def _handle_academia_pdf(self, url: str, filename: str, download_dir: str) -> Optional[Path]:
         """Academia.edu PDF处理器"""
         try:
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ Academia.edu处理失败: {e}")
@@ -262,7 +336,7 @@ class EnhancedPDFProcessor:
     def _handle_semantic_scholar_pdf(self, url: str, filename: str, download_dir: str) -> Optional[Path]:
         """Semantic Scholar PDF处理器"""
         try:
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ Semantic Scholar处理失败: {e}")
@@ -276,9 +350,9 @@ class EnhancedPDFProcessor:
                 doc_id = re.search(r'/document/(\d+)', url)
                 if doc_id:
                     pdf_url = f"https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber={doc_id.group(1)}"
-                    return self._download_from_url_enhanced(pdf_url, filename, download_dir)
+                    return self._download_from_url_enhanced(pdf_url, filename, download_dir, recursion_depth=0)
             
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ IEEE处理失败: {e}")
@@ -290,9 +364,9 @@ class EnhancedPDFProcessor:
             # ACM的PDF链接模式
             if '/doi/' in url and '/pdf/' not in url:
                 pdf_url = url.replace('/doi/', '/doi/pdf/')
-                return self._download_from_url_enhanced(pdf_url, filename, download_dir)
+                return self._download_from_url_enhanced(pdf_url, filename, download_dir, recursion_depth=0)
             
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ ACM处理失败: {e}")
@@ -330,7 +404,7 @@ class EnhancedPDFProcessor:
     def _handle_springer_pdf(self, url: str, filename: str, download_dir: str) -> Optional[Path]:
         """Springer PDF处理器"""
         try:
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ Springer处理失败: {e}")
@@ -339,7 +413,7 @@ class EnhancedPDFProcessor:
     def _handle_nature_pdf(self, url: str, filename: str, download_dir: str) -> Optional[Path]:
         """Nature PDF处理器"""
         try:
-            return self._download_from_url_enhanced(url, filename, download_dir)
+            return self._download_from_url_enhanced(url, filename, download_dir, recursion_depth=0)
             
         except Exception as e:
             print(f"      ❌ Nature处理失败: {e}")
@@ -353,6 +427,10 @@ class EnhancedPDFProcessor:
         try:
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
+            
+            # 🆕 记录尝试的URL
+            normalized_url = self._normalize_url(url)
+            self._attempted_urls.add(normalized_url)
             
             download_dir_path = Path(download_dir)
             file_path = download_dir_path / f"{filename}.pdf"
@@ -393,14 +471,31 @@ class EnhancedPDFProcessor:
             print(f"        ❌ 特殊下载失败: {e}")
             return None
     
-    def _download_from_url_enhanced(self, url: str, filename: str, download_dir: str) -> Optional[Path]:
-        """增强的URL下载方法"""
+    def _download_from_url_enhanced(self, url: str, filename: str, download_dir: str, recursion_depth: int = 0) -> Optional[Path]:
+        """🆕 增强的URL下载方法（添加递归深度限制）"""
         if not url:
             return None
-            
+        
+        # 🆕 检查递归深度
+        if recursion_depth >= self._max_recursion_depth:
+            print(f"        ⚠️ 达到最大递归深度 {self._max_recursion_depth}，停止尝试")
+            return None
+        
+        # 🆕 验证URL
+        if not self._is_valid_url(url):
+            print(f"        ❌ 无效URL: {url}")
+            return None
+        
         try:
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
+            
+            # 🆕 记录尝试的URL
+            normalized_url = self._normalize_url(url)
+            if normalized_url in self._attempted_urls:
+                print(f"        ⚠️ 已尝试过此URL，跳过")
+                return None
+            self._attempted_urls.add(normalized_url)
             
             download_dir_path = Path(download_dir)
             file_path = download_dir_path / f"{filename}.pdf"
@@ -409,7 +504,7 @@ class EnhancedPDFProcessor:
                 print(f"        ✅ 文件已存在")
                 return file_path
             
-            print(f"        📥 下载中...")
+            print(f"        📥 下载中... (深度: {recursion_depth})")
             
             # 增加随机延迟
             time.sleep(random.uniform(0.5, 1.5))
@@ -436,16 +531,23 @@ class EnhancedPDFProcessor:
             
             elif 'text/html' in content_type:
                 # HTML页面，尝试解析PDF链接
-                print(f"        🔍 解析HTML页面中的PDF链接...")
+                print(f"        🔍 解析HTML页面中的PDF链接... (深度: {recursion_depth})")
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
                 pdf_links = self._extract_pdf_links_from_html(soup, url)
                 
-                for pdf_link in pdf_links[:3]:
-                    print(f"        📥 尝试HTML中的PDF链接...")
-                    pdf_path = self._download_from_url_enhanced(pdf_link, filename, download_dir)
+                # 🆕 限制尝试的链接数量，并递增深度
+                max_attempts = max(1, 5 - recursion_depth)  # 随深度减少尝试次数
+                for i, pdf_link in enumerate(pdf_links[:max_attempts]):
+                    print(f"        📥 尝试HTML中的PDF链接 {i+1}/{min(len(pdf_links), max_attempts)}... (深度: {recursion_depth})")
+                    
+                    # 🆕 递归调用时增加深度
+                    pdf_path = self._download_from_url_enhanced(pdf_link, filename, download_dir, recursion_depth + 1)
                     if pdf_path:
                         return pdf_path
+                    
+                    # 🆕 添加延迟避免过快请求
+                    time.sleep(0.5)
             
             return None
             
@@ -454,7 +556,7 @@ class EnhancedPDFProcessor:
             return None
     
     def _extract_pdf_links_from_html(self, soup: BeautifulSoup, base_url: str) -> List[str]:
-        """从HTML中提取PDF链接"""
+        """🆕 从HTML中提取PDF链接（增强验证）"""
         pdf_links = []
         
         # 查找明确的PDF链接
@@ -462,40 +564,81 @@ class EnhancedPDFProcessor:
             href = link['href']
             text = link.get_text().lower()
             
+            # 🆕 先验证链接有效性
+            if not self._is_valid_url(href):
+                continue
+            
             # 检查链接和文本
-            if (('.pdf' in href.lower()) or 
-                ('download' in text) or 
-                ('pdf' in text) or
-                ('full text' in text) or
-                ('view pdf' in text)):
-                
-                full_url = urljoin(base_url, href)
-                pdf_links.append(full_url)
+            is_pdf_link = False
+            
+            # 直接PDF文件链接
+            if '.pdf' in href.lower():
+                is_pdf_link = True
+            
+            # 基于文本内容判断
+            elif any(keyword in text for keyword in ['download', 'pdf', 'full text', 'view pdf']):
+                # 🆕 进一步验证：确保不是导航链接
+                if not any(nav_keyword in text for nav_keyword in ['menu', 'navigation', 'home', 'about', 'contact']):
+                    is_pdf_link = True
+            
+            if is_pdf_link:
+                try:
+                    full_url = urljoin(base_url, href)
+                    # 🆕 再次验证完整URL
+                    if self._is_valid_url(full_url):
+                        pdf_links.append(full_url)
+                except Exception:
+                    continue
         
         # 查找特殊的PDF按钮或链接
         pdf_selectors = [
             'a[href*=".pdf"]',
             'a[href*="download"]',
-            'a[href*="pdf"]',
             '.pdf-download a',
             '.download-pdf a',
             '.full-text a'
         ]
         
         for selector in pdf_selectors:
-            elements = soup.select(selector)
-            for element in elements:
-                href = element.get('href')
-                if href:
-                    full_url = urljoin(base_url, href)
-                    pdf_links.append(full_url)
+            try:
+                elements = soup.select(selector)
+                for element in elements:
+                    href = element.get('href')
+                    if href and self._is_valid_url(href):
+                        try:
+                            full_url = urljoin(base_url, href)
+                            if self._is_valid_url(full_url):
+                                pdf_links.append(full_url)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
         
-        return list(set(pdf_links))  # 去重
+        # 🆕 去重并验证所有链接
+        unique_valid_links = []
+        seen_normalized = set()
+        
+        for link in pdf_links:
+            if self._is_valid_url(link):
+                normalized = self._normalize_url(link)
+                if normalized not in seen_normalized and normalized not in self._attempted_urls:
+                    unique_valid_links.append(link)
+                    seen_normalized.add(normalized)
+        
+        print(f"          找到 {len(unique_valid_links)} 个有效PDF链接")
+        return unique_valid_links
     
     def _deep_parse_scholar_page(self, scholar_url: str, filename: str, download_dir: str) -> Optional[Path]:
         """深度解析Google Scholar页面"""
         try:
             print(f"    🔍 深度解析Scholar页面...")
+            
+            # 🆕 检查是否已尝试过
+            normalized_url = self._normalize_url(scholar_url)
+            if normalized_url in self._attempted_urls:
+                print(f"      ⚠️ 已尝试过此Scholar页面，跳过")
+                return None
+            self._attempted_urls.add(normalized_url)
             
             # 增加随机延迟
             time.sleep(random.uniform(2, 4))
@@ -515,7 +658,8 @@ class EnhancedPDFProcessor:
                 
                 if (self._is_potential_pdf_link(href, text)):
                     full_url = urljoin(scholar_url, href)
-                    pdf_links.append(full_url)
+                    if self._is_valid_url(full_url):
+                        pdf_links.append(full_url)
             
             # 方法2: 查找特殊的Scholar元素
             scholar_pdf_elements = soup.find_all(['div', 'span'], class_=re.compile(r'gs_or|gs_fl|gs_ggs'))
@@ -525,12 +669,22 @@ class EnhancedPDFProcessor:
                     href = link['href']
                     if self._is_potential_pdf_link(href, link.get_text().lower()):
                         full_url = urljoin(scholar_url, href)
-                        pdf_links.append(full_url)
+                        if self._is_valid_url(full_url):
+                            pdf_links.append(full_url)
+            
+            # 🆕 去重并验证
+            unique_links = []
+            seen = set()
+            for link in pdf_links:
+                normalized = self._normalize_url(link)
+                if normalized not in seen and normalized not in self._attempted_urls:
+                    unique_links.append(link)
+                    seen.add(normalized)
             
             # 尝试下载找到的链接
-            for pdf_link in pdf_links[:5]:  # 限制尝试次数
-                print(f"        📥 尝试Scholar解析链接...")
-                pdf_path = self._download_from_url_enhanced(pdf_link, filename, download_dir)
+            for i, pdf_link in enumerate(unique_links[:3]):  # 🆕 限制尝试次数
+                print(f"        📥 尝试Scholar解析链接 {i+1}/{min(len(unique_links), 3)}...")
+                pdf_path = self._download_from_url_enhanced(pdf_link, filename, download_dir, recursion_depth=1)
                 if pdf_path:
                     return pdf_path
                 time.sleep(1)
@@ -543,6 +697,10 @@ class EnhancedPDFProcessor:
     
     def _is_potential_pdf_link(self, href: str, text: str) -> bool:
         """判断是否为潜在的PDF链接"""
+        # 🆕 首先检查基本有效性
+        if not self._is_valid_url(href):
+            return False
+        
         href_lower = href.lower()
         text_lower = text.lower()
         
@@ -555,14 +713,16 @@ class EnhancedPDFProcessor:
         if any(domain in href_lower for domain in pdf_domains):
             return True
         
-        # PDF相关的文本
-        pdf_keywords = ['pdf', 'download', 'full text', 'view paper', 'get pdf', 'paper']
+        # PDF相关的文本（🆕 更严格的判断）
+        pdf_keywords = ['pdf', 'download', 'full text', 'view paper', 'get pdf']
         if any(keyword in text_lower for keyword in pdf_keywords):
-            return True
+            # 🆕 排除导航和无关链接
+            exclusion_keywords = ['menu', 'navigation', 'home', 'about', 'contact', 'login', 'signup']
+            if not any(keyword in text_lower for keyword in exclusion_keywords):
+                return True
         
-        # 下载类关键词
-        download_keywords = ['download', 'view', 'access', 'read']
-        if any(keyword in href_lower for keyword in download_keywords):
+        # 下载类关键词（🆕 更严格）
+        if 'download' in href_lower and len(text_lower) < 50:  # 避免长文本链接
             return True
         
         return False
@@ -614,12 +774,10 @@ class EnhancedPDFProcessor:
             
             for i, result in enumerate(search.results()):
                 similarity = self._title_similarity(original_title, result.title)
-                # print(f"        📄 候选 {i+1}: {result.title}")
-                # print(f"           相似度: {similarity:.2f}, arXiv ID: {result.get_short_id()}")
                 
                 if similarity > 0.2:  # 相对宽松的匹配阈值
                     print(f"        ✅ 找到匹配论文，下载PDF...")
-                    pdf_path = self._download_from_url_enhanced(result.pdf_url, filename, download_dir)
+                    pdf_path = self._download_from_url_enhanced(result.pdf_url, filename, download_dir, recursion_depth=0)
                     if pdf_path:
                         print(f"        ✅ arXiv PDF下载成功!")
                         return pdf_path
@@ -660,8 +818,6 @@ class EnhancedPDFProcessor:
                         continue
                     
                     similarity = self._title_similarity(original_title, candidate_title)
-                    print(f"        📄 候选 {processed_count+1}: {candidate_title}")
-                    print(f"           相似度: {similarity:.2f}")
                     
                     if similarity > 0.4:  # scholarly使用稍高的匹配阈值
                         print(f"        ✅ 找到匹配论文，尝试获取PDF...")
@@ -679,11 +835,12 @@ class EnhancedPDFProcessor:
                         
                         # 尝试下载找到的PDF链接
                         for pdf_url in pdf_urls:
-                            print(f"          📥 尝试PDF链接...")
-                            pdf_path = self._download_from_url_enhanced(pdf_url, filename, download_dir)
-                            if pdf_path:
-                                print(f"        ✅ scholarly PDF下载成功!")
-                                return pdf_path
+                            if self._is_valid_url(pdf_url):
+                                print(f"          📥 尝试PDF链接...")
+                                pdf_path = self._download_from_url_enhanced(pdf_url, filename, download_dir, recursion_depth=0)
+                                if pdf_path:
+                                    print(f"        ✅ scholarly PDF下载成功!")
+                                    return pdf_path
                         
                         print(f"        ❌ scholarly PDF链接均下载失败")
                     
@@ -737,8 +894,6 @@ class EnhancedPDFProcessor:
                         continue
                     
                     similarity = self._title_similarity(original_title, candidate_title)
-                    print(f"        📄 候选 {i+1}: {candidate_title}")
-                    print(f"           相似度: {similarity:.2f}")
                     
                     if similarity > 0.5:  # DBLP使用较高的匹配阈值
                         print(f"        ✅ 找到匹配论文，尝试获取PDF...")
@@ -750,7 +905,7 @@ class EnhancedPDFProcessor:
                             doi_url = f"https://doi.org/{doi}"
                             print(f"          📥 尝试DOI链接: {doi}")
                             
-                            pdf_path = self._download_from_url_enhanced(doi_url, filename, download_dir)
+                            pdf_path = self._download_from_url_enhanced(doi_url, filename, download_dir, recursion_depth=0)
                             if pdf_path:
                                 print(f"        ✅ DBLP DOI PDF下载成功!")
                                 return pdf_path
@@ -761,14 +916,15 @@ class EnhancedPDFProcessor:
                         url_elem = info.find('url')
                         if url_elem is not None and url_elem.text:
                             paper_url = url_elem.text
-                            print(f"          📥 尝试论文页面链接...")
-                            
-                            pdf_path = self._download_from_url_enhanced(paper_url, filename, download_dir)
-                            if pdf_path:
-                                print(f"        ✅ DBLP 页面PDF下载成功!")
-                                return pdf_path
-                            else:
-                                print(f"        ❌ DBLP 页面PDF下载失败")
+                            if self._is_valid_url(paper_url):
+                                print(f"          📥 尝试论文页面链接...")
+                                
+                                pdf_path = self._download_from_url_enhanced(paper_url, filename, download_dir, recursion_depth=0)
+                                if pdf_path:
+                                    print(f"        ✅ DBLP 页面PDF下载成功!")
+                                    return pdf_path
+                                else:
+                                    print(f"        ❌ DBLP 页面PDF下载失败")
                 
                 except Exception as e:
                     print(f"        ⚠️ 处理DBLP结果出错: {e}")
